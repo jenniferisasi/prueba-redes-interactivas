@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Visualization</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sigma.js/2.4.0/sigma.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/graphology/0.25.1/graphology.umd.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0a0e27;
+            color: #e0e0e0;
+            overflow: hidden;
+        }
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        #graph {
+            width: 100%;
+            height: 100%;
+        }
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(20, 25, 45, 0.95);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            max-width: 300px;
+        }
+        h1 {
+            font-size: 20px;
+            margin-bottom: 15px;
+            color: #4a9eff;
+        }
+        .control-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 13px;
+            color: #a0a0a0;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-size: 14px;
+        }
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #4a9eff;
+        }
+        button {
+            width: 100%;
+            padding: 10px;
+            background: linear-gradient(135deg, #667eea 0%, #4a9eff 100%);
+            border: none;
+            border-radius: 6px;
+            color: white;
+            font-size: 14px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(74, 158, 255, 0.4);
+        }
+        #stats {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 13px;
+        }
+        .stat {
+            margin-bottom: 5px;
+            color: #a0a0a0;
+        }
+        .stat strong {
+            color: #4a9eff;
+        }
+        #info {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(20, 25, 45, 0.95);
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            max-width: 300px;
+            display: none;
+        }
+        #info h3 {
+            font-size: 16px;
+            margin-bottom: 8px;
+            color: #4a9eff;
+        }
+        #info p {
+            font-size: 13px;
+            margin-bottom: 5px;
+            color: #a0a0a0;
+        }
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 18px;
+            color: #4a9eff;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="graph"></div>
+        <div id="controls">
+            <h1>Network Viewer</h1>
+            <div class="control-group">
+                <label for="search">Search nodes:</label>
+                <input type="text" id="search" placeholder="Type to search...">
+            </div>
+            <button id="reset">Reset View</button>
+            <div id="stats">
+                <div class="stat"><strong>Nodes:</strong> <span id="nodeCount">-</span></div>
+                <div class="stat"><strong>Edges:</strong> <span id="edgeCount">-</span></div>
+            </div>
+        </div>
+        <div id="info">
+            <h3 id="infoLabel"></h3>
+            <p><strong>Community:</strong> <span id="infoCommunity"></span></p>
+            <p><strong>Degree:</strong> <span id="infoDegree"></span></p>
+            <p><strong>Connections:</strong> <span id="infoConnections"></span></p>
+        </div>
+        <div class="loading" id="loading">Loading network...</div>
+    </div>
+
+    <script>
+        const Graph = graphology.Graph;
+        let renderer;
+        let graph;
+        let hoveredNode = null;
+
+        async function loadGEXF() {
+            try {
+                const response = await fetch('sample-network.gexf');
+                const gexfText = await response.text();
+                return parseGEXF(gexfText);
+            } catch (error) {
+                console.error('Error loading GEXF:', error);
+                document.getElementById('loading').textContent = 'Error loading network file';
+            }
+        }
+
+        function parseGEXF(xmlText) {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+            const g = new Graph();
+
+            const nodes = xmlDoc.getElementsByTagName('node');
+            for (let node of nodes) {
+                const id = node.getAttribute('id');
+                const label = node.getAttribute('label');
+                
+                const sizeEl = node.getElementsByTagName('viz:size')[0];
+                const posEl = node.getElementsByTagName('viz:position')[0];
+                const colorEl = node.getElementsByTagName('viz:color')[0];
+                const attvalues = node.getElementsByTagName('attvalue');
+                
+                const attributes = {};
+                for (let att of attvalues) {
+                    const attrId = att.getAttribute('for');
+                    const value = att.getAttribute('value');
+                    if (attrId === '0') attributes.community = value;
+                    if (attrId === '1') attributes.degree = parseInt(value);
+                }
+
+                g.addNode(id, {
+                    label: label || id,
+                    size: sizeEl ? parseFloat(sizeEl.getAttribute('value')) : 10,
+                    x: posEl ? parseFloat(posEl.getAttribute('x')) : Math.random() * 100,
+                    y: posEl ? parseFloat(posEl.getAttribute('y')) : Math.random() * 100,
+                    color: colorEl ? 
+                        `rgb(${colorEl.getAttribute('r')}, ${colorEl.getAttribute('g')}, ${colorEl.getAttribute('b')})` : 
+                        '#666',
+                    ...attributes
+                });
+            }
+
+            const edges = xmlDoc.getElementsByTagName('edge');
+            for (let edge of edges) {
+                const id = edge.getAttribute('id');
+                const source = edge.getAttribute('source');
+                const target = edge.getAttribute('target');
+                const weight = parseFloat(edge.getAttribute('weight')) || 1.0;
+
+                g.addEdge(source, target, {
+                    size: weight * 2,
+                    color: '#333'
+                });
+            }
+
+            return g;
+        }
+
+        async function init() {
+            graph = await loadGEXF();
+            
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('nodeCount').textContent = graph.order;
+            document.getElementById('edgeCount').textContent = graph.size;
+
+            renderer = new Sigma(graph, document.getElementById('graph'), {
+                renderEdgeLabels: false,
+                defaultNodeColor: '#666',
+                defaultEdgeColor: '#333',
+                labelSize: 12,
+                labelColor: { color: '#e0e0e0' },
+                minCameraRatio: 0.1,
+                maxCameraRatio: 10
+            });
+
+            // Node click event
+            renderer.on('clickNode', ({ node }) => {
+                const nodeData = graph.getNodeAttributes(node);
+                const neighbors = graph.neighbors(node);
+                
+                document.getElementById('infoLabel').textContent = nodeData.label;
+                document.getElementById('infoCommunity').textContent = nodeData.community || 'N/A';
+                document.getElementById('infoDegree').textContent = nodeData.degree || graph.degree(node);
+                document.getElementById('infoConnections').textContent = neighbors.map(n => 
+                    graph.getNodeAttribute(n, 'label')
+                ).join(', ');
+                document.getElementById('info').style.display = 'block';
+            });
+
+            // Hover effect
+            renderer.on('enterNode', ({ node }) => {
+                hoveredNode = node;
+                const nodeData = graph.getNodeAttributes(node);
+                graph.setNodeAttribute(node, 'highlighted', true);
+                
+                // Highlight neighbors
+                const neighbors = graph.neighbors(node);
+                neighbors.forEach(neighbor => {
+                    graph.setNodeAttribute(neighbor, 'highlighted', true);
+                });
+                
+                renderer.refresh();
+            });
+
+            renderer.on('leaveNode', () => {
+                if (hoveredNode) {
+                    graph.setNodeAttribute(hoveredNode, 'highlighted', false);
+                    const neighbors = graph.neighbors(hoveredNode);
+                    neighbors.forEach(neighbor => {
+                        graph.setNodeAttribute(neighbor, 'highlighted', false);
+                    });
+                    hoveredNode = null;
+                    renderer.refresh();
+                }
+            });
+
+            // Click background to hide info
+            renderer.on('clickStage', () => {
+                document.getElementById('info').style.display = 'none';
+            });
+
+            // Search functionality
+            document.getElementById('search').addEventListener('input', (e) => {
+                const searchTerm = e.target.value.toLowerCase();
+                
+                graph.forEachNode((node, attributes) => {
+                    if (searchTerm && attributes.label.toLowerCase().includes(searchTerm)) {
+                        graph.setNodeAttribute(node, 'highlighted', true);
+                        graph.setNodeAttribute(node, 'size', attributes.size * 1.5);
+                    } else {
+                        graph.setNodeAttribute(node, 'highlighted', false);
+                        graph.setNodeAttribute(node, 'size', attributes.size);
+                    }
+                });
+                
+                renderer.refresh();
+            });
+
+            // Reset view
+            document.getElementById('reset').addEventListener('click', () => {
+                renderer.getCamera().animatedReset();
+                document.getElementById('search').value = '';
+                graph.forEachNode((node, attributes) => {
+                    graph.setNodeAttribute(node, 'highlighted', false);
+                });
+                document.getElementById('info').style.display = 'none';
+            });
+
+            // Node rendering with highlight
+            renderer.setSetting('nodeReducer', (node, data) => {
+                const res = { ...data };
+                if (data.highlighted) {
+                    res.color = '#ffeb3b';
+                    res.zIndex = 1;
+                }
+                return res;
+            });
+        }
+
+        init();
+    </script>
+</body>
+</html>
